@@ -1,5 +1,5 @@
 import React from "react";
-import { ChartPanelProps, ChartPanelState, ChartType, CrossColor, FastestSolve, MethodName, OllEdgeOrientation, PllCornerPermutation, Solve, StepName } from "../Helpers/Types";
+import { ChartPanelProps, ChartPanelState, ChartType, CrossColor, FastestSolve, MethodName, OllEdgeOrientation, PllCornerPermutation, Solve, StepName, StreakData } from "../Helpers/Types";
 import { Chart as ChartJS, ChartData, CategoryScale, Point } from 'chart.js/auto';
 import { calculateAverage, calculateMovingAverage, calculateMovingPercentage, calculateMovingStdDev, reduceDataset, splitIntoChunks, getTypicalAverages, calculateMovingAverageChopped } from "../Helpers/MathHelpers";
 import { createOptions, buildChartHtml } from "../Helpers/ChartHelpers";
@@ -164,6 +164,84 @@ export class ChartPanel extends React.Component<ChartPanelProps, ChartPanelState
 
         return data;
     }
+
+    isPreviousDay(date1: Date, date2: Date): boolean {
+        const day1 = new Date(date1.getFullYear(), date1.getMonth(), date1.getDate());
+        const day2 = new Date(date2.getFullYear(), date2.getMonth(), date2.getDate());
+        const timeDiff = day2.getTime() - day1.getTime();
+        const dayDiff = timeDiff / (1000 * 60 * 60 * 24);
+        return dayDiff === 1;
+    }
+
+    buildStreakData(fastestSolveEachDay: { [key: string]: number }, targetTime: number): StreakData {
+        let daysSorted = Object.keys(fastestSolveEachDay).sort();
+        let streak = 0;
+        let longestStreak = 0;
+
+        for (let i = 0; i < daysSorted.length; i++) {
+            let day = daysSorted[i];
+            let time = fastestSolveEachDay[day];
+            if (i > 0 && !this.isPreviousDay(new Date(daysSorted[i - 1]), new Date(day))) {
+                streak = 0;
+            }
+            if (time < targetTime) {
+                streak++;
+                longestStreak = Math.max(longestStreak, streak);
+            } else {
+                streak = 0;
+            }
+        }
+
+        let streakData: StreakData = {
+            longestStreak: longestStreak,
+            currentStreak: streak
+        };
+
+        return streakData;
+    }
+
+    buildDailyRecordData() {
+        let fastestSolveEachDay: { [key: string]: number } = {};
+        for (let i = 0; i < this.props.solves.length; i++) {
+            let day = this.props.solves[i].date.toLocaleDateString('en-CA');
+            if (fastestSolveEachDay[day]) {
+                fastestSolveEachDay[day] = Math.min(fastestSolveEachDay[day], this.props.solves[i].time);
+            } else {
+                fastestSolveEachDay[day] = this.props.solves[i].time;
+            }
+        }
+        console.log("fast solves", fastestSolveEachDay)
+        let streaks: { [key: number]: StreakData } = {};
+        streaks[5] = this.buildStreakData(fastestSolveEachDay, 5);
+        streaks[10] = this.buildStreakData(fastestSolveEachDay, 10);
+        streaks[15] = this.buildStreakData(fastestSolveEachDay, 15);
+        streaks[20] = this.buildStreakData(fastestSolveEachDay, 20);
+        streaks[30] = this.buildStreakData(fastestSolveEachDay, 30);
+        streaks[10000] = this.buildStreakData(fastestSolveEachDay, 10000);
+
+        let cols = [
+            { key: 'time', name: 'Target Time' },
+            { key: 'currentstreak', name: 'Current Streak' },
+            { key: 'longeststreak', name: 'Longest Streak' }
+        ]
+
+        let rows = [
+            { time: 'Sub-5', longeststreak: String(streaks[5].longestStreak), currentstreak: String(streaks[5].currentStreak) },
+            { time: 'Sub-10', longeststreak: String(streaks[10].longestStreak), currentstreak: String(streaks[10].currentStreak) },
+            { time: 'Sub-15', longeststreak: String(streaks[15].longestStreak), currentstreak: String(streaks[15].currentStreak) },
+            { time: 'Sub-20', longeststreak: String(streaks[20].longestStreak), currentstreak: String(streaks[20].currentStreak) },
+            { time: 'Sub-30', longeststreak: String(streaks[30].longestStreak), currentstreak: String(streaks[30].currentStreak) },
+            { time: 'Overall', longeststreak: String(streaks[10000].longestStreak), currentstreak: String(streaks[10000].currentStreak) },
+        ]
+
+        rows = rows.map(row => ({
+            ...row,
+            currentstreak: row.longeststreak === row.currentstreak && row.currentstreak != '0' ? `${row.currentstreak} 🔥` : row.currentstreak
+        }));
+
+        return (<DataGrid rows={rows} columns={cols} />);
+    }
+
 
     buildStepPercentages() {
         let totals: { [step in StepName]?: number } = {};
@@ -682,6 +760,7 @@ export class ChartPanel extends React.Component<ChartPanelProps, ChartPanelState
         charts.push(buildChartHtml(<Bar data={this.buildInspectionData()} options={createOptions(ChartType.Bar, "Inspection Time (s)", "Solve Time (s)", this.props.useLogScale)} />, "Average solve time by inspection time", "This chart shows your average, grouped up by how much inspection time (For example, the left bar is the 1/7 of your solves with the lowest inspection time, and the right bar is the 1/7 of your solves with the most inspection time)"));
         charts.push(buildChartHtml(<Line data={this.buildStepAverages()} options={createOptions(ChartType.Line, "Solve Number", "Time (s)", this.props.useLogScale)} />, "Average Time by Step", "This chart shows what percentage of your solve each step takes"));
         charts.push(buildChartHtml(<Line data={this.buildRunningInspectionData()} options={createOptions(ChartType.Line, "Solve Number", "Time (s)", this.props.useLogScale)} />, "Average Inspection Time", "This chart shows how much inspection time you use on average"));
+        charts.push(buildChartHtml(this.buildDailyRecordData(), "Longest Daily Streaks", "How many days in a row you've achieved solves of each time"));
 
         // Add charts that require OLL
         if (ollIndex != -1) {

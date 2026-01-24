@@ -204,3 +204,8 @@ export interface FastestSolve {
     scramble: string,
     id: string
 }
+
+export interface StreakData {
+    longestStreak: number,
+    currentStreak: number,
+}
