@@ -157,9 +157,9 @@ export class FilterPanel extends React.Component<FilterPanelProps, FilterPanelSt
             newSolves.push(allSolves[i]);
             let numSteps = Const.MethodSteps[newSolves[i].method].length;
             for (let j = 0; j < numSteps; j++) {
-                if (newSolves[i].steps[j].time == 0) {
+                if (newSolves[i].steps[j].time === 0) {
                     newSolves[i].isFullStep = false;
-                    continue;
+                    break;
                 }
             }
         }
@@ -424,6 +424,7 @@ export class FilterPanel extends React.Component<FilterPanelProps, FilterPanelSt
             })
             newSolve.steps = newSteps;
 
+            // TODO: probably don't use GetEmptySolve, but directly create a new solve so new props aren't forgotten
             newSolve.id = solve.id;
             newSolve.crossColor = solve.crossColor;
             newSolve.date = solve.date;
@@ -436,6 +437,8 @@ export class FilterPanel extends React.Component<FilterPanelProps, FilterPanelSt
             newSolve.time = newSolve.steps.reduce((sum, current) => sum + current.time, 0);
             newSolve.turns = newSolve.steps.reduce((sum, current) => sum + current.turns, 0);
             newSolve.tps = newSolve.time == 0 ? 0 : newSolve.turns / newSolve.time;
+            newSolve.isFullStep = solve.isFullStep;
+            newSolve.isMistake = solve.isMistake;
 
             newSolves.push(newSolve);
         })

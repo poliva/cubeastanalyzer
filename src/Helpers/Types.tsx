@@ -211,6 +211,7 @@ export interface FastestSolve {
     date: string,
     scramble: string,
     id: string
+    fullstep: string
 }
 
 export interface StreakData {

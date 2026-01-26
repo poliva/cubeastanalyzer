@@ -765,12 +765,21 @@ export class ChartPanel extends React.Component<ChartPanelProps, ChartPanelState
             { key: 'time', name: 'Time' },
             { key: 'date', name: 'Date' },
             { key: 'scramble', name: 'Scramble' },
-            { key: 'id', name: 'ID' } // Make invisible?
+            { key: 'id', name: 'ID' },
+            { key: 'fullstep', name: "Full Step" }
         ];
 
         let solveCopy: Solve[] = structuredClone(this.props.solves);
         let fastest: Solve[] = solveCopy.sort((a: Solve, b: Solve) => a.time - b.time).slice(0, Const.FastestSolvesCount);
-        let reduced: FastestSolve[] = fastest.map(x => { return { date: x.date.toDateString(), time: x.time.toFixed(3), scramble: x.scramble, id: x.id } });
+        let reduced: FastestSolve[] = fastest.map(x => {
+            return {
+                date: x.date.toDateString(),
+                time: x.time.toFixed(3),
+                scramble: x.scramble,
+                id: x.id,
+                fullstep: x.isFullStep ? "Yes 🔥" : "No"
+            } as FastestSolve;
+        });
 
         return (<DataGrid rows={reduced} columns={cols} onCellClick={this.openCubeast} />);
     }
