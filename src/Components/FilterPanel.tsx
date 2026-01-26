@@ -8,7 +8,7 @@ import { ChartPanel } from "./ChartPanel";
 import { calculateMovingAverage, calculateMovingStdDev } from "../Helpers/MathHelpers";
 import { FormControl, Card, Row, Offcanvas, Col, Button, Tooltip, OverlayTrigger, Alert, Container, CardText } from 'react-bootstrap';
 import { Const } from "../Helpers/Constants";
-import { CalculateAllSessionOptions, GetEmptySolve } from "../Helpers/CubeHelpers";
+import { CalculateAllSessionOptions } from "../Helpers/CubeHelpers";
 import ReactSwitch from "react-switch";
 
 export class FilterPanel extends React.Component<FilterPanelProps, FilterPanelState> {
