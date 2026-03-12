@@ -355,7 +355,45 @@ export class ChartPanel extends React.Component<ChartPanelProps, ChartPanelState
         // https://www.cubeskills.com/blog/cfop-solve-splits-tool
 
         // Get users's average for each step, and average overall
+        // If there are no solves, return an empty comparison chart
+        if (this.props.solves.length === 0) {
+            let labels = ['Cross', 'F2L', 'OLL', 'PLL'];
+            let zeroes = [0, 0, 0, 0];
+            let data: ChartData<"bar"> = {
+                labels,
+                datasets: [
+                    {
+                        label: `Your average by step over last ${this.props.windowSize}`,
+                        data: zeroes
+                    },
+                    {
+                        label: `Typical cuber's average by step, using your average time`,
+                        data: zeroes
+                    }
+                ]
+            };
+            return data;
+        }
+
         let average = calculateAverage(this.props.solves.map(x => x.time).slice(-this.props.windowSize));
+        if (!Number.isFinite(average)) {
+            let labels = ['Cross', 'F2L', 'OLL', 'PLL'];
+            let zeroes = [0, 0, 0, 0];
+            let data: ChartData<"bar"> = {
+                labels,
+                datasets: [
+                    {
+                        label: `Your average by step over last ${this.props.windowSize}`,
+                        data: zeroes
+                    },
+                    {
+                        label: `Typical cuber's average by step, using your average time`,
+                        data: zeroes
+                    }
+                ]
+            };
+            return data;
+        }
         let crossAverage = calculateAverage(this.props.solves.map(x => x.steps[0].time).slice(-this.props.windowSize));
         let f2l1Average = calculateAverage(this.props.solves.map(x => x.steps[1].time).slice(-this.props.windowSize));
         let f2l2Average = calculateAverage(this.props.solves.map(x => x.steps[2].time).slice(-this.props.windowSize));
