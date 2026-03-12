@@ -205,5 +205,7 @@ export interface FastestSolve {
     time: string,
     date: string,
     scramble: string,
-    id: string
+    id: string,
+    source: 'cubeast' | 'acubemy',
+    rawSourceId?: string
 }

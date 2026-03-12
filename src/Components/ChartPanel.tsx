@@ -675,9 +675,18 @@ export class ChartPanel extends React.Component<ChartPanelProps, ChartPanelState
 
         let solveCopy: Solve[] = structuredClone(this.props.solves);
         let fastest: Solve[] = solveCopy.sort((a: Solve, b: Solve) => a.time - b.time).slice(0, Const.FastestSolvesCount);
-        let reduced: FastestSolve[] = fastest.map(x => { return { date: x.date.toDateString(), time: x.time.toFixed(3), scramble: x.scramble, id: x.id } });
+        let reduced: FastestSolve[] = fastest.map(x => {
+            return {
+                date: x.date.toDateString(),
+                time: x.time.toFixed(3),
+                scramble: x.scramble,
+                id: x.id,
+                source: x.source,
+                rawSourceId: x.rawSourceId
+            };
+        });
 
-        return (<DataGrid rows={reduced} columns={cols} onCellClick={this.openCubeast} />);
+        return (<DataGrid rows={reduced} columns={cols} onCellClick={this.openSolveSource} />);
     }
 
     createTooltip(description: string): JSX.Element {
@@ -689,8 +698,14 @@ export class ChartPanel extends React.Component<ChartPanelProps, ChartPanelState
         return tooltip;
     }
 
-    openCubeast(params: CellClickArgs<FastestSolve>) {
-        window.open("https://app.cubeast.com/log/solves/" + params.row.id)
+    openSolveSource(params: CellClickArgs<FastestSolve>) {
+        if (params.row.source === 'acubemy' && params.row.rawSourceId) {
+            window.open("https://acubemy.com/shared/" + params.row.rawSourceId);
+            return;
+        }
+
+        // Default / fallback to Cubeast
+        window.open("https://app.cubeast.com/log/solves/" + params.row.id);
     }
 
     render() {

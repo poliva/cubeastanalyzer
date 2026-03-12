@@ -392,6 +392,10 @@ export class FilterPanel extends React.Component<FilterPanelProps, FilterPanelSt
             newSolve.method = solve.method;
             newSolve.scramble = solve.scramble;
             newSolve.time = newSolve.steps.reduce((sum, current) => sum + current.time, 0);
+            newSolve.source = solve.source;
+            newSolve.rawSourceId = solve.rawSourceId;
+            newSolve.rawSource = solve.rawSource;
+            newSolve.session = solve.session;
 
             const stepTurns = newSolve.steps.reduce((sum, current) => sum + current.turns, 0);
 
