@@ -3,11 +3,40 @@ import { GetEmptySolve } from "./CubeHelpers";
 import { Solve, CrossColor, MethodName, StepName } from "./Types";
 import moment from 'moment';
 
-function parseCubeastCsv(stringVal: string, splitter: string): Solve[] {
-    stringVal = stringVal.replace(/(\[.*?\])/g, '');
+const AUF_MOVES = new Set(['U', "U'", 'U2', "U2'", "U3", "U3'"]);
 
-    const [keys, ...rest] = stringVal
-        .trim()
+/** Returns duration in ms of leading AUF moves (U, U', U2, U2') from step_N_recorded_moves. */
+function computeAufDurationMs(recordedMoves: string): number {
+    if (!recordedMoves || !recordedMoves.trim()) return 0;
+    const tokens = recordedMoves.trim().split(/\s+/);
+    let firstAufTs: number | null = null;
+    let lastAufTs: number | null = null;
+    for (const token of tokens) {
+        const m = token.match(/^(.+)\[(\d+)\]$/);
+        if (!m) continue;
+        const move = m[1];
+        const ts = Number(m[2]);
+        if (AUF_MOVES.has(move)) {
+            if (firstAufTs == null) firstAufTs = ts;
+            lastAufTs = ts;
+        } else {
+            if (firstAufTs != null) return Math.max(0, ts - firstAufTs);
+            return 0;
+        }
+    }
+    if (firstAufTs != null && lastAufTs != null) return Math.max(0, lastAufTs - firstAufTs);
+    return 0;
+}
+
+const COMMA_PLACEHOLDER = '\x01';
+
+function parseCubeastCsv(stringVal: string, splitter: string): Solve[] {
+
+    // Replace commas inside [...] so split(splitter) does not break on e.g. step case "[FL,BR]->FR 30".
+    // Preserves bracket content (including timestamps in step_N_recorded_moves) for AUF parsing.
+    const normalized = stringVal.trim().replace(/\[[^\]]*\]/g, (m) => m.replace(/,/g, COMMA_PLACEHOLDER));
+
+    const [keys, ...rest] = normalized
         .split("\n")
         .map((item) => item.split(splitter));
 
@@ -36,10 +65,14 @@ function parseCubeastCsv(stringVal: string, splitter: string): Solve[] {
         "name": (step, value) => { step.name = value as StepName; },
         "slice_turns": (step, value) => { step.turns = Number(value); },
         "time": (step, value) => { step.time = Number(value) / 1000; },
-        "case": (step, value) => { step.case = value; },
+        "case": (step, value) => { step.case = value ? value.split(COMMA_PLACEHOLDER).join(',') : value; },
         "turns_per_second": (step, value) => { step.tps = Number(value); },
         "recognition_time": (step, value) => { step.recognitionTime = Number(value) / 1000; },
         "execution_time": (step, value) => { step.executionTime = Number(value) / 1000; },
+        "recorded_moves": (step, value) => {
+            const aufMs = computeAufDurationMs(value);
+            if (aufMs > 0) (step as any).aufDurationMs = aufMs;
+        },
     };
 
     let formedArr = rest.map((item) => {
@@ -54,6 +87,20 @@ function parseCubeastCsv(stringVal: string, splitter: string): Solve[] {
                 keyMap[key]?.(obj, item[index]);
             }
         });
+
+        // Apply AUF adjustment: move leading AUF time from recognition to execution per step
+        const stepTimeMs = (s: { time: number }) => s.time * 1000;
+        for (const step of obj.steps) {
+            const aufMs = (step as any).aufDurationMs as number | undefined;
+            if (aufMs == null || aufMs <= 0) continue;
+            const capMs = Math.min(aufMs, stepTimeMs(step));
+            const deltaSec = capMs / 1000;
+            step.recognitionTime = Math.max(0, step.recognitionTime - deltaSec);
+            step.executionTime += deltaSec;
+            delete (step as any).aufDurationMs;
+        }
+        obj.recognitionTime = obj.steps.reduce((s, st) => s + st.recognitionTime, 0);
+        obj.executionTime = obj.steps.reduce((s, st) => s + st.executionTime, 0);
 
         obj.source = 'cubeast';
         obj.rawSource = 'cubeast';

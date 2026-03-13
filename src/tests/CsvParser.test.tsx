@@ -20,6 +20,33 @@ describe('CsvParser', () => {
         expect(solve.crossColor).toBe('Yellow'); // UF solution rotation maps to Yellow cross
     });
 
+    test('Cubeast AUF adjustment moves leading AUF time from recognition to execution', () => {
+        const solves: Solve[] = parseCsv(cubeastSample, ',');
+        expect(solves.length).toBe(1);
+        const solve = solves[0];
+        // F2L Slot 1 has leading U'[5452] U[5831] R'[6309] -> AUF duration = 6309 - 5452 = 857 ms
+        const step1 = solve.steps[1];
+        expect(step1.name).toBe('F2L Slot 1');
+        expect(step1.recognitionTime).toBeCloseTo(3.083 - 0.857, 3); // was 3083 ms
+        expect(step1.executionTime).toBeCloseTo(1.095 + 0.857, 3);   // was 1095 ms
+        // Solve totals are recomputed from adjusted steps
+        const sumRec = solve.steps.reduce((s, st) => s + st.recognitionTime, 0);
+        const sumExec = solve.steps.reduce((s, st) => s + st.executionTime, 0);
+        expect(solve.recognitionTime).toBeCloseTo(sumRec, 3);
+        expect(solve.executionTime).toBeCloseTo(sumExec, 3);
+    });
+
+    test('Cubeast steps with no leading AUF are unchanged', () => {
+        const solves: Solve[] = parseCsv(cubeastSample, ',');
+        const solve = solves[0];
+        // Step 5 OLL: R'[19873] F[20055]... - no leading AUF, so recognition/execution unchanged
+        const oll = solve.steps[5];
+        expect(oll.name).toBe('OLL');
+        // OLL raw: recognition 1819 ms, execution 2225 ms. No leading AUF -> no change
+        expect(oll.recognitionTime).toBeCloseTo(1.819, 3);
+        expect(oll.executionTime).toBeCloseTo(2.225, 3);
+    });
+
     test('parses Acubemy CSV into solves', () => {
         const solves: Solve[] = parseCsv(acubemySample, ',');
         expect(solves.length).toBe(1);
