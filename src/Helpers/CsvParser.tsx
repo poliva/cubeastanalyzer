@@ -30,6 +30,25 @@ function computeAufDurationMs(recordedMoves: string): number {
 
 const COMMA_PLACEHOLDER = '\x01';
 
+// --- Shared helpers for Acubemy move parsing  ---
+
+function normalizeMovesString(raw: string | undefined | null): string {
+    if (!raw) return "";
+    const trimmed = raw.trim();
+    if (!trimmed) return "";
+    // Strip surrounding quotes Acubemy may add around move strings.
+    const withoutQuotes = trimmed.replace(/^"(.*)"$/, "$1");
+    return withoutQuotes.trim();
+}
+
+function tokenizeMoves(raw: string | undefined | null): string[] {
+    const normalized = normalizeMovesString(raw);
+    if (!normalized) return [];
+    return normalized
+        .split(/\s+/)
+        .filter((token) => token.length > 0);
+}
+
 function parseCubeastCsv(stringVal: string, splitter: string): Solve[] {
 
     // Replace commas inside [...] so split(splitter) does not break on e.g. step case "[FL,BR]->FR 30".
@@ -124,14 +143,21 @@ function parseAcubemyCsv(stringVal: string, splitter: string): Solve[] {
         "z", "z'", "z2",
     ]);
 
+    type AcubemyStepDef = { index: number; name: StepName; movesField: string };
+
+    const ACUBEMY_STEP_DEFS: AcubemyStepDef[] = [
+        { index: 0, name: StepName.Cross, movesField: "cross_moves" },
+        { index: 1, name: StepName.F2L_1, movesField: "f2l_pair1_moves" },
+        { index: 2, name: StepName.F2L_2, movesField: "f2l_pair2_moves" },
+        { index: 3, name: StepName.F2L_3, movesField: "f2l_pair3_moves" },
+        { index: 4, name: StepName.F2L_4, movesField: "f2l_pair4_moves" },
+        { index: 5, name: StepName.OLL, movesField: "oll_moves" },
+        { index: 6, name: StepName.PLL, movesField: "pll_moves" },
+    ];
+
     const countNonRotationMoves = (moves: string | undefined | null): number => {
-        if (!moves) return 0;
-        // Strip surrounding quotes Acubemy may add around move strings.
-        const normalizedMoves = moves.trim().replace(/^"(.*)"$/, "$1");
-        if (!normalizedMoves) return 0;
-        const tokens = normalizedMoves
-            .split(/\s+/)
-            .filter((token) => token.length > 0);
+        const tokens = tokenizeMoves(moves);
+        if (!tokens.length) return 0;
         return tokens.filter((token) => !ROTATIONS.has(token.toLowerCase())).length;
     };
     const [keys, ...rows] = stringVal
@@ -139,20 +165,213 @@ function parseAcubemyCsv(stringVal: string, splitter: string): Solve[] {
         .split("\n")
         .map((item) => item.split(splitter));
 
-    const indexOf = (name: string) => keys.indexOf(name);
+    const buildKeyIndex = (header: string[]): Record<string, number> => {
+        const index: Record<string, number> = {};
+        header.forEach((key, i) => {
+            if (!(key in index)) {
+                index[key] = i;
+            }
+        });
+        return index;
+    };
+
+    const keyIndex = buildKeyIndex(keys);
+
+    const makeRowAccessors = (row: string[]) => {
+        const get = (name: string): string => {
+            const idx = keyIndex[name];
+            return typeof idx === "number" && idx >= 0 ? row[idx] ?? "" : "";
+        };
+        const getNumber = (name: string): number => {
+            const v = get(name);
+            return v ? Number(v) : 0;
+        };
+        return { get, getNumber };
+    };
+
+    const initAcubemySteps = (
+        steps: Solve["steps"],
+        get: (name: string) => string,
+        countMoves: (moves: string | undefined | null) => number
+    ) => {
+        for (const def of ACUBEMY_STEP_DEFS) {
+            const s = steps[def.index];
+            const moves = get(def.movesField);
+            s.name = def.name;
+            s.time = 0;
+            s.recognitionTime = 0;
+            s.executionTime = 0;
+            s.turns = countMoves(moves);
+            if (moves) {
+                s.moves = moves;
+            }
+        }
+    };
+
+    const normalizeAcubemyLastLayerCases = (
+        steps: Solve["steps"],
+        ollCaseRaw: string,
+        pllCaseRaw: string
+    ) => {
+        const ollStep = steps[5];
+        if (ollStep) {
+            ollStep.name = StepName.OLL;
+            if (ollCaseRaw) {
+                ollStep.case = ollCaseRaw === "-1" ? "Solved" : ollCaseRaw;
+            }
+        }
+
+        const pllStep = steps[6];
+        if (pllStep) {
+            pllStep.name = StepName.PLL;
+            if (pllCaseRaw) {
+                pllStep.case = pllCaseRaw === "Unknown" ? "Solved" : pllCaseRaw;
+            }
+        }
+    };
+
+    const computeAcubemySolveTurnsAndTps = (
+        solve: Solve,
+        solutionMoves: string | undefined | null,
+        countMoves: (moves: string | undefined | null) => number
+    ) => {
+        const totalTurns = countMoves(solutionMoves);
+        solve.turns = totalTurns;
+        if (solve.time > 0) {
+            solve.tps = totalTurns / solve.time;
+        } else {
+            solve.tps = 0;
+        }
+    };
+
+    type StepRange = {
+        startIdx: number;
+        endIdx: number;
+        firstNonIdx: number | null;
+        lastNonIdx: number | null;
+    };
+
+    const recomputeAcubemyStepTimes = (
+        solve: Solve,
+        stepDefs: AcubemyStepDef[],
+        solutionMovesRaw: string | undefined | null,
+        moveTimesRaw: string | undefined | null,
+        rotations: Set<string>
+    ) => {
+        const solutionTokens = tokenizeMoves(solutionMovesRaw);
+        if (!solutionTokens.length || !moveTimesRaw || !moveTimesRaw.trim()) {
+            return;
+        }
+
+        const timeTokens = normalizeMovesString(moveTimesRaw)
+            .split(/\s+/)
+            .filter((t) => t.length > 0)
+            .map((t) => Number(t));
+
+        if (solutionTokens.length !== timeTokens.length || solutionTokens.length === 0) {
+            return;
+        }
+
+        const matchStepRange = (
+            stepMoves: string,
+            searchFrom: number
+        ): StepRange | null => {
+            const tokens = tokenizeMoves(stepMoves);
+            if (tokens.length === 0) return null;
+            const first = tokens[0];
+            for (let i = searchFrom; i <= solutionTokens.length - tokens.length; i++) {
+                if (solutionTokens[i] !== first) continue;
+                let ok = true;
+                for (let j = 1; j < tokens.length; j++) {
+                    if (solutionTokens[i + j] !== tokens[j]) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) continue;
+                let firstNon: number | null = null;
+                let lastNon: number | null = null;
+                for (let k = 0; k < tokens.length; k++) {
+                    const globalIdx = i + k;
+                    const move = solutionTokens[globalIdx];
+                    if (!rotations.has(move.toLowerCase())) {
+                        if (firstNon == null) firstNon = globalIdx;
+                        lastNon = globalIdx;
+                    }
+                }
+                return {
+                    startIdx: i,
+                    endIdx: i + tokens.length - 1,
+                    firstNonIdx: firstNon,
+                    lastNonIdx: lastNon,
+                };
+            }
+            return null;
+        };
+
+        const steps = solve.steps;
+        const stepRanges: (StepRange | null)[] = [];
+        let searchFrom = 0;
+        for (const def of stepDefs) {
+            const s = steps[def.index];
+            const movesString = s.moves as string | undefined;
+            const range = movesString ? matchStepRange(movesString, searchFrom) : null;
+            stepRanges[def.index] = range;
+            if (range) {
+                searchFrom = range.endIdx + 1;
+            }
+        }
+
+        let prevLastNonIdx: number | null = null;
+        let accumulatedRecMs = 0;
+        let accumulatedExecMs = 0;
+
+        for (const def of stepDefs) {
+            const s = steps[def.index];
+            const range = stepRanges[def.index];
+
+            if (!range || range.firstNonIdx == null || range.lastNonIdx == null) {
+                s.recognitionTime = 0;
+                s.executionTime = 0;
+                s.time = 0;
+                s.tps = 0;
+                continue;
+            }
+
+            const execStartMs = timeTokens[range.firstNonIdx];
+            const execEndMs = timeTokens[range.lastNonIdx];
+            const execMs = Math.max(0, execEndMs - execStartMs);
+
+            let recStartMs: number;
+            if (prevLastNonIdx == null) {
+                recStartMs = timeTokens[0];
+            } else {
+                recStartMs = timeTokens[prevLastNonIdx];
+            }
+            const recEndMs = execStartMs;
+            const recMs = Math.max(0, recEndMs - recStartMs);
+
+            s.executionTime = execMs / 1000;
+            s.recognitionTime = recMs / 1000;
+            s.time = s.executionTime + s.recognitionTime;
+
+            if (s.time > 0 && s.turns > 0) {
+                s.tps = s.turns / s.time;
+            }
+
+            accumulatedExecMs += execMs;
+            accumulatedRecMs += recMs;
+            prevLastNonIdx = range.lastNonIdx;
+        }
+
+        solve.executionTime = accumulatedExecMs / 1000;
+        solve.recognitionTime = accumulatedRecMs / 1000;
+    };
 
     const formedArr = rows.map((item) => {
         const solve = GetEmptySolve();
 
-        const get = (name: string) => {
-            const idx = indexOf(name);
-            return idx >= 0 ? item[idx] : "";
-        };
-
-        const getNumber = (name: string) => {
-            const v = get(name);
-            return v ? Number(v) : 0;
-        };
+        const { get, getNumber } = makeRowAccessors(item);
 
         solve.source = 'acubemy';
         solve.rawSource = 'acubemy';
@@ -207,214 +426,25 @@ function parseAcubemyCsv(stringVal: string, splitter: string): Solve[] {
             }
         }
 
+        const steps = solve.steps;
         const ollCaseRaw = get("oll_case_id");
         const pllCaseRaw = get("pll_case_name");
 
-        // map steps into existing array
-        const steps = solve.steps;
+        initAcubemySteps(steps, get, countNonRotationMoves);
+        normalizeAcubemyLastLayerCases(steps, ollCaseRaw, pllCaseRaw);
 
-        const setStep = (
-            index: number,
-            name: StepName,
-            movesField: string,
-            timeField: string,
-            caseField?: string
-        ) => {
-            const moves = get(movesField);
-            // Presence of a step is determined by moves; we do not trust or use
-            // Acubemy's per-step time fields for timing and will recompute
-            // timings from `solution` + `move_times` instead.
-            if (!moves) {
-                return;
-            }
-            const s = steps[index];
-            s.name = name;
-            s.moves = moves;
-            // Step recognition/execution/time will be fully recomputed later
-            // from `solution` + `move_times`, so initialize them to zero here.
-            s.time = 0;
-            s.recognitionTime = 0;
-            s.executionTime = 0;
-            // Count turns from move tokens, excluding rotations.
-            s.turns = countNonRotationMoves(moves);
-            // tps will also be recomputed once final step time is known.
-            if (caseField) {
-                s.case = get(caseField);
-            }
-        };
-
-        setStep(0, StepName.Cross, "cross_moves", "cross_time");
-        setStep(1, StepName.F2L_1, "f2l_pair1_moves", "f2l_pair1_time");
-        setStep(2, StepName.F2L_2, "f2l_pair2_moves", "f2l_pair2_time");
-        setStep(3, StepName.F2L_3, "f2l_pair3_moves", "f2l_pair3_time");
-        setStep(4, StepName.F2L_4, "f2l_pair4_moves", "f2l_pair4_time");
-        setStep(5, StepName.OLL, "oll_moves", "oll_time", "oll_case_id");
-        setStep(6, StepName.PLL, "pll_moves", "pll_time", "pll_case_name");
-
-        // Normalize Acubemy OLL/PLL skip encodings to the shared "Solved" case label,
-        // so they behave like Cubeast data in filters and charts.
-        const ollStep = steps[5];
-        if (ollStep) {
-            ollStep.name = StepName.OLL;
-            if (ollCaseRaw) {
-                ollStep.case = ollCaseRaw === "-1" ? "Solved" : ollCaseRaw;
-            }
-        }
-
-        const pllStep = steps[6];
-        if (pllStep) {
-            pllStep.name = StepName.PLL;
-            if (pllCaseRaw) {
-                pllStep.case = pllCaseRaw === "Unknown" ? "Solved" : pllCaseRaw;
-            }
-        }
-
-        // Recompute solve-level turns/tps from the full solution, ignoring rotations.
         const solutionMoves = get("solution") || get("raw_solution");
-        const totalTurns = countNonRotationMoves(solutionMoves);
-        solve.turns = totalTurns;
-        if (solve.time > 0) {
-            solve.tps = totalTurns / solve.time;
-        } else {
-            solve.tps = 0;
-        }
+        computeAcubemySolveTurnsAndTps(solve, solutionMoves, countNonRotationMoves);
 
-        // Recompute step-level recognition/execution times from solution + move_times when possible.
         const moveTimesRaw = get("move_times");
-        const canRecompute =
-            !!solutionMoves &&
-            !!moveTimesRaw &&
-            moveTimesRaw.trim().length > 0;
-
-        if (canRecompute) {
-            const solutionTokens = solutionMoves
-                .trim()
-                .replace(/^"(.*)"$/, "$1")
-                .split(/\s+/)
-                .filter((t) => t.length > 0);
-
-            const timeTokens = moveTimesRaw
-                .trim()
-                .replace(/^"(.*)"$/, "$1")
-                .split(/\s+/)
-                .filter((t) => t.length > 0)
-                .map((t) => Number(t));
-
-            if (solutionTokens.length === timeTokens.length && solutionTokens.length > 0) {
-                type StepRange = {
-                    startIdx: number;
-                    endIdx: number;
-                    firstNonIdx: number | null;
-                    lastNonIdx: number | null;
-                };
-
-                const stepDefs: { index: number; movesField: string }[] = [
-                    { index: 0, movesField: "cross_moves" },
-                    { index: 1, movesField: "f2l_pair1_moves" },
-                    { index: 2, movesField: "f2l_pair2_moves" },
-                    { index: 3, movesField: "f2l_pair3_moves" },
-                    { index: 4, movesField: "f2l_pair4_moves" },
-                    { index: 5, movesField: "oll_moves" },
-                    { index: 6, movesField: "pll_moves" },
-                ];
-
-                const matchStepRange = (
-                    stepMoves: string,
-                    searchFrom: number
-                ): StepRange | null => {
-                    const normalized = stepMoves.trim().replace(/^"(.*)"$/, "$1");
-                    if (!normalized) return null;
-                    const tokens = normalized
-                        .split(/\s+/)
-                        .filter((t) => t.length > 0);
-                    if (tokens.length === 0) return null;
-                    const first = tokens[0];
-                    for (let i = searchFrom; i <= solutionTokens.length - tokens.length; i++) {
-                        if (solutionTokens[i] !== first) continue;
-                        let ok = true;
-                        for (let j = 1; j < tokens.length; j++) {
-                            if (solutionTokens[i + j] !== tokens[j]) {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        if (!ok) continue;
-                        let firstNon: number | null = null;
-                        let lastNon: number | null = null;
-                        for (let k = 0; k < tokens.length; k++) {
-                            const globalIdx = i + k;
-                            const move = solutionTokens[globalIdx];
-                            if (!ROTATIONS.has(move.toLowerCase())) {
-                                if (firstNon == null) firstNon = globalIdx;
-                                lastNon = globalIdx;
-                            }
-                        }
-                        return {
-                            startIdx: i,
-                            endIdx: i + tokens.length - 1,
-                            firstNonIdx: firstNon,
-                            lastNonIdx: lastNon,
-                        };
-                    }
-                    return null;
-                };
-
-                const stepRanges: (StepRange | null)[] = [];
-                let searchFrom = 0;
-                for (const def of stepDefs) {
-                    const movesString = get(def.movesField);
-                    const range = movesString ? matchStepRange(movesString, searchFrom) : null;
-                    stepRanges[def.index] = range;
-                    if (range) {
-                        searchFrom = range.endIdx + 1;
-                    }
-                }
-
-                let prevLastNonIdx: number | null = null;
-                let accumulatedRecMs = 0;
-                let accumulatedExecMs = 0;
-
-                for (const def of stepDefs) {
-                    const s = steps[def.index];
-                    const range = stepRanges[def.index];
-
-                    if (!range || range.firstNonIdx == null || range.lastNonIdx == null) {
-                        s.recognitionTime = 0;
-                        s.executionTime = 0;
-                        s.time = 0;
-                        s.tps = 0;
-                        continue;
-                    }
-
-                    const execStartMs = timeTokens[range.firstNonIdx];
-                    const execEndMs = timeTokens[range.lastNonIdx];
-                    const execMs = Math.max(0, execEndMs - execStartMs);
-
-                    let recStartMs: number;
-                    if (prevLastNonIdx == null) {
-                        recStartMs = timeTokens[0];
-                    } else {
-                        recStartMs = timeTokens[prevLastNonIdx];
-                    }
-                    const recEndMs = execStartMs;
-                    const recMs = Math.max(0, recEndMs - recStartMs);
-
-                    s.executionTime = execMs / 1000;
-                    s.recognitionTime = recMs / 1000;
-                    s.time = s.executionTime + s.recognitionTime;
-
-                    if (s.time > 0 && s.turns > 0) {
-                        s.tps = s.turns / s.time;
-                    }
-
-                    accumulatedExecMs += execMs;
-                    accumulatedRecMs += recMs;
-                    prevLastNonIdx = range.lastNonIdx;
-                }
-
-                solve.executionTime = accumulatedExecMs / 1000;
-                solve.recognitionTime = accumulatedRecMs / 1000;
-            }
+        if (solutionMoves && moveTimesRaw && moveTimesRaw.trim().length > 0) {
+            recomputeAcubemyStepTimes(
+                solve,
+                ACUBEMY_STEP_DEFS,
+                solutionMoves,
+                moveTimesRaw,
+                ROTATIONS
+            );
         }
 
         return solve;
