@@ -217,7 +217,7 @@ export class FilterPanel extends React.Component<FilterPanelProps, FilterPanelSt
         // Update anything that needs it
         newState.allSolves = nextProps.solves;
         newState.filteredSolves = FilterPanel.applyFiltersToSolves(nextProps.solves, prevState.filters, newState.windowSize);
-        if (newState.windowSize >= newState.filteredSolves.length) {
+        if (newState.filteredSolves.length > 0 && newState.windowSize >= newState.filteredSolves.length) {
             newState.windowSize = Math.max(5, Math.ceil(newState.filteredSolves.length / 4));
         }
 
