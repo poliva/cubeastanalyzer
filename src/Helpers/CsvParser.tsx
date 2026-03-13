@@ -118,20 +118,21 @@ function parseCubeastCsv(stringVal: string, splitter: string): Solve[] {
 }
 
 function parseAcubemyCsv(stringVal: string, splitter: string): Solve[] {
+    const ROTATIONS = new Set([
+        "x", "x'", "x2",
+        "y", "y'", "y2",
+        "z", "z'", "z2",
+    ]);
+
     const countNonRotationMoves = (moves: string | undefined | null): number => {
         if (!moves) return 0;
         // Strip surrounding quotes Acubemy may add around move strings.
         const normalizedMoves = moves.trim().replace(/^"(.*)"$/, "$1");
         if (!normalizedMoves) return 0;
-        const rotationSet = new Set([
-            "x", "x'", "x2",
-            "y", "y'", "y2",
-            "z", "z'", "z2",
-        ]);
         const tokens = normalizedMoves
             .split(/\s+/)
             .filter((token) => token.length > 0);
-        return tokens.filter((token) => !rotationSet.has(token.toLowerCase())).length;
+        return tokens.filter((token) => !ROTATIONS.has(token.toLowerCase())).length;
     };
     const [keys, ...rows] = stringVal
         .trim()
@@ -140,7 +141,7 @@ function parseAcubemyCsv(stringVal: string, splitter: string): Solve[] {
 
     const indexOf = (name: string) => keys.indexOf(name);
 
-    const formedArr = rows.map((item) => {
+        const formedArr = rows.map((item) => {
         const solve = GetEmptySolve();
 
         const get = (name: string) => {
@@ -330,6 +331,144 @@ function parseAcubemyCsv(stringVal: string, splitter: string): Solve[] {
             solve.tps = totalTurns / solve.time;
         } else {
             solve.tps = 0;
+        }
+
+        // Recompute step-level recognition/execution times from solution + move_times when possible.
+        const moveTimesRaw = get("move_times");
+        const canRecompute =
+            !!solutionMoves &&
+            !!moveTimesRaw &&
+            moveTimesRaw.trim().length > 0;
+
+        if (canRecompute) {
+            const solutionTokens = solutionMoves
+                .trim()
+                .replace(/^"(.*)"$/, "$1")
+                .split(/\s+/)
+                .filter((t) => t.length > 0);
+
+            const timeTokens = moveTimesRaw
+                .trim()
+                .replace(/^"(.*)"$/, "$1")
+                .split(/\s+/)
+                .filter((t) => t.length > 0)
+                .map((t) => Number(t));
+
+            if (solutionTokens.length === timeTokens.length && solutionTokens.length > 0) {
+                type StepRange = {
+                    startIdx: number;
+                    endIdx: number;
+                    firstNonIdx: number | null;
+                    lastNonIdx: number | null;
+                };
+
+                const stepDefs: { index: number; movesField: string }[] = [
+                    { index: 0, movesField: "cross_moves" },
+                    { index: 1, movesField: "f2l_pair1_moves" },
+                    { index: 2, movesField: "f2l_pair2_moves" },
+                    { index: 3, movesField: "f2l_pair3_moves" },
+                    { index: 4, movesField: "f2l_pair4_moves" },
+                    { index: 5, movesField: "oll_moves" },
+                    { index: 6, movesField: "pll_moves" },
+                ];
+
+                const matchStepRange = (
+                    stepMoves: string,
+                    searchFrom: number
+                ): StepRange | null => {
+                    const normalized = stepMoves.trim().replace(/^"(.*)"$/, "$1");
+                    if (!normalized) return null;
+                    const tokens = normalized
+                        .split(/\s+/)
+                        .filter((t) => t.length > 0);
+                    if (tokens.length === 0) return null;
+                    const first = tokens[0];
+                    for (let i = searchFrom; i <= solutionTokens.length - tokens.length; i++) {
+                        if (solutionTokens[i] !== first) continue;
+                        let ok = true;
+                        for (let j = 1; j < tokens.length; j++) {
+                            if (solutionTokens[i + j] !== tokens[j]) {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if (!ok) continue;
+                        let firstNon: number | null = null;
+                        let lastNon: number | null = null;
+                        for (let k = 0; k < tokens.length; k++) {
+                            const globalIdx = i + k;
+                            const move = solutionTokens[globalIdx];
+                            if (!ROTATIONS.has(move.toLowerCase())) {
+                                if (firstNon == null) firstNon = globalIdx;
+                                lastNon = globalIdx;
+                            }
+                        }
+                        return {
+                            startIdx: i,
+                            endIdx: i + tokens.length - 1,
+                            firstNonIdx: firstNon,
+                            lastNonIdx: lastNon,
+                        };
+                    }
+                    return null;
+                };
+
+                const stepRanges: (StepRange | null)[] = [];
+                let searchFrom = 0;
+                for (const def of stepDefs) {
+                    const movesString = get(def.movesField);
+                    const range = movesString ? matchStepRange(movesString, searchFrom) : null;
+                    stepRanges[def.index] = range;
+                    if (range) {
+                        searchFrom = range.endIdx + 1;
+                    }
+                }
+
+                let prevLastNonIdx: number | null = null;
+                let accumulatedRecMs = 0;
+                let accumulatedExecMs = 0;
+
+                for (const def of stepDefs) {
+                    const s = steps[def.index];
+                    const range = stepRanges[def.index];
+
+                    if (!range || range.firstNonIdx == null || range.lastNonIdx == null) {
+                        s.recognitionTime = 0;
+                        s.executionTime = 0;
+                        s.time = 0;
+                        s.tps = 0;
+                        continue;
+                    }
+
+                    const execStartMs = timeTokens[range.firstNonIdx];
+                    const execEndMs = timeTokens[range.lastNonIdx];
+                    const execMs = Math.max(0, execEndMs - execStartMs);
+
+                    let recStartMs: number;
+                    if (prevLastNonIdx == null) {
+                        recStartMs = timeTokens[0];
+                    } else {
+                        recStartMs = timeTokens[prevLastNonIdx];
+                    }
+                    const recEndMs = execStartMs;
+                    const recMs = Math.max(0, recEndMs - recStartMs);
+
+                    s.executionTime = execMs / 1000;
+                    s.recognitionTime = recMs / 1000;
+                    s.time = s.executionTime + s.recognitionTime;
+
+                    if (s.time > 0 && s.turns > 0) {
+                        s.tps = s.turns / s.time;
+                    }
+
+                    accumulatedExecMs += execMs;
+                    accumulatedRecMs += recMs;
+                    prevLastNonIdx = range.lastNonIdx;
+                }
+
+                solve.executionTime = accumulatedExecMs / 1000;
+                solve.recognitionTime = accumulatedRecMs / 1000;
+            }
         }
 
         return solve;

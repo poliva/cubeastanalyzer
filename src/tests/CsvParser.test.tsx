@@ -114,6 +114,40 @@ describe('CsvParser', () => {
         expect(solve.steps[5].turns).toBe(2);
     });
 
+    test('Acubemy recomputes step recognition/execution using rotations between steps as recognition for next step', () => {
+        const csv = `solve_id,date,total_time,scramble,solution,turns,tps,move_times,analysis_type,device_name,session_name,raw_solution,raw_timestamps,gyro_data,cross_face,cross_moves,cross_time,cross_execution_time,f2l_pair1_moves,f2l_pair1_time,f2l_pair1_recognition_time,f2l_pair1_execution_time,f2l_pair2_moves,f2l_pair2_time,f2l_pair2_recognition_time,f2l_pair2_execution_time,f2l_pair3_moves,f2l_pair3_time,f2l_pair3_recognition_time,f2l_pair3_execution_time,f2l_pair4_moves,f2l_pair4_time,f2l_pair4_recognition_time,f2l_pair4_execution_time,oll_case_id,oll_moves,oll_time,oll_recognition_time,oll_execution_time,pll_case_name,pll_moves,pll_time,pll_recognition_time,pll_execution_time
+1,2026-01-08T10:32:50.222Z,8000,,x R U y U' L',0,0,"0 1000 2000 3000 4000 5000",CFOP,DEV,TEST,,,,U,x R U,3000,3000,y U' L',5000,2000,3000,,,,,,,,,,,,,0,,,0,0,,,0,0`;
+
+        const solves: Solve[] = parseCsv(csv, ',');
+        const solve = solves[0];
+
+        const cross = solve.steps[0];
+        const f2l1 = solve.steps[1];
+
+        // Global timeline:
+        // 0ms:  x   (rotation)
+        // 1000: R   (cross first non-rotation)
+        // 2000: U   (cross last non-rotation)
+        // 3000: y   (rotation between steps)
+        // 4000: U'  (F2L1 first non-rotation)
+        // 5000: L'  (F2L1 last non-rotation)
+
+        // Cross: recognition from 0 -> 1000, execution from 1000 -> 2000.
+        expect(cross.recognitionTime).toBeCloseTo(1.0, 5);
+        expect(cross.executionTime).toBeCloseTo(1.0, 5);
+
+        // F2L1: recognition from previous step's last non-rotation (2000) to first non-rotation (4000),
+        // so it includes the intermediate rotation y at 3000.
+        expect(f2l1.recognitionTime).toBeCloseTo(2.0, 5);
+        expect(f2l1.executionTime).toBeCloseTo(1.0, 5);
+
+        // Totals are consistent with per-step sums.
+        const sumRec = solve.steps.reduce((s, st) => s + st.recognitionTime, 0);
+        const sumExec = solve.steps.reduce((s, st) => s + st.executionTime, 0);
+        expect(solve.recognitionTime).toBeCloseTo(sumRec, 5);
+        expect(solve.executionTime).toBeCloseTo(sumExec, 5);
+    });
+
     test('Acubemy OLL/PLL skips are treated as Solved cases', () => {
         const csv = `solve_id,date,total_time,analysis_type,device_name,session_name,cross_face,oll_case_id,pll_case_name
 1,2026-01-08T10:32:50.222Z,10000,CFOP,DEV,TEST,U,-1,Unknown`;
